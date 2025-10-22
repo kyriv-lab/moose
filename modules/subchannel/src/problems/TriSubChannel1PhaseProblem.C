@@ -67,21 +67,16 @@ TriSubChannel1PhaseProblem::initializeSolution()
 {
   if (_deformation)
   {
-    // update surface area, wetted perimeter based on: Dpin, displacement
-    Real standard_area, wire_area, additional_area, wetted_perimeter, displaced_area;
+    // update surface area, wetted perimeter, fuel pin gap, based on: Dpin, displacement
+    // (user must have initialized surface area and wetted perimeter)
     auto flat_to_flat = _tri_sch_mesh.getFlatToFlat();
     auto n_rings = _tri_sch_mesh.getNumOfRings();
     auto pitch = _subchannel_mesh.getPitch();
     auto pin_diameter = _subchannel_mesh.getPinDiameter();
-    auto wire_diameter = _tri_sch_mesh.getWireDiameter();
-    auto wire_lead_length = _tri_sch_mesh.getWireLeadLength();
     auto gap = _tri_sch_mesh.getDuctToPinGap();
     auto z_blockage = _subchannel_mesh.getZBlockage();
     auto index_blockage = _subchannel_mesh.getIndexBlockage();
     auto reduction_blockage = _subchannel_mesh.getReductionBlockage();
-    auto theta = std::acos(wire_lead_length /
-                           std::sqrt(std::pow(wire_lead_length, 2) +
-                                     std::pow(libMesh::pi * (pin_diameter + wire_diameter), 2)));
     for (unsigned int iz = 0; iz < _n_cells + 1; iz++)
     {
       for (unsigned int i_ch = 0; i_ch < _n_channels; i_ch++)
@@ -89,58 +84,44 @@ TriSubChannel1PhaseProblem::initializeSolution()
         auto subch_type = _subchannel_mesh.getSubchannelType(i_ch);
         auto * node = _subchannel_mesh.getChannelNode(i_ch, iz);
         auto Z = _z_grid[iz];
-        Real rod_area = 0.0;
-        Real rod_perimeter = 0.0;
+        Real subchannel_area = (*_S_flow_soln)(node);
+        Real wetted_perimeter = (*_w_perim_soln)(node);
+        /// calculate the change in subchannel area and wetted perimeter due to change in pin diameter
         for (auto i_pin : _subchannel_mesh.getChannelPins(i_ch))
         {
           auto * pin_node = _subchannel_mesh.getPinNode(i_pin, iz);
           if (subch_type == EChannelType::CENTER || subch_type == EChannelType::CORNER)
           {
-            rod_area +=
-                (1.0 / 6.0) * 0.25 * M_PI * (*_Dpin_soln)(pin_node) * (*_Dpin_soln)(pin_node);
-            rod_perimeter += (1.0 / 6.0) * M_PI * (*_Dpin_soln)(pin_node);
+            subchannel_area +=
+                (1.0 / 6.0) * 0.25 * M_PI *
+                ((*_Dpin_soln)(pin_node) * (*_Dpin_soln)(pin_node)-pin_diameter * pin_diameter);
+            wetted_perimeter += (1.0 / 6.0) * M_PI * ((*_Dpin_soln)(pin_node)-pin_diameter);
           }
           else
           {
-            rod_area +=
-                (1.0 / 4.0) * 0.25 * M_PI * (*_Dpin_soln)(pin_node) * (*_Dpin_soln)(pin_node);
-            rod_perimeter += (1.0 / 4.0) * M_PI * (*_Dpin_soln)(pin_node);
+            subchannel_area +=
+                (1.0 / 4.0) * 0.25 * M_PI *
+                ((*_Dpin_soln)(pin_node) * (*_Dpin_soln)(pin_node)-pin_diameter * pin_diameter);
+            wetted_perimeter += (1.0 / 4.0) * M_PI * ((*_Dpin_soln)(pin_node)-pin_diameter);
           }
         }
 
+        /// calculate the change in subchannel area and wetted perimeter due to duct deformation
         if (subch_type == EChannelType::CENTER)
         {
-          standard_area = std::pow(pitch, 2.0) * std::sqrt(3.0) / 4.0;
-          additional_area = 0.0;
-          displaced_area = 0.0;
-          wire_area = libMesh::pi * std::pow(wire_diameter, 2.0) / 8.0 / std::cos(theta);
-          wetted_perimeter = rod_perimeter + 0.5 * libMesh::pi * wire_diameter / std::cos(theta);
+          // nothing changes for center subchannels
         }
         else if (subch_type == EChannelType::EDGE)
         {
-          standard_area = pitch * (pin_diameter / 2.0 + gap);
-          additional_area = 0.0;
-          displaced_area = (*_displacement_soln)(node)*pitch;
-          wire_area = libMesh::pi * std::pow(wire_diameter, 2.0) / 8.0 / std::cos(theta);
-          wetted_perimeter =
-              rod_perimeter + 0.5 * libMesh::pi * wire_diameter / std::cos(theta) + pitch;
+          subchannel_area += (*_displacement_soln)(node)*pitch;
         }
         else
         {
-          standard_area = 1.0 / std::sqrt(3.0) * std::pow((pin_diameter / 2.0 + gap), 2.0);
-          additional_area = 0.0;
-          displaced_area = 1.0 / std::sqrt(3.0) *
-                           (pin_diameter + 2.0 * gap + (*_displacement_soln)(node)) *
-                           (*_displacement_soln)(node);
-          wire_area = libMesh::pi / 24.0 * std::pow(wire_diameter, 2.0) / std::cos(theta);
-          wetted_perimeter =
-              rod_perimeter + libMesh::pi * wire_diameter / std::cos(theta) / 6.0 +
-              2.0 / std::sqrt(3.0) * (pin_diameter / 2.0 + gap + (*_displacement_soln)(node));
+          subchannel_area += 1.0 / std::sqrt(3.0) *
+                             (pin_diameter + 2.0 * gap + (*_displacement_soln)(node)) *
+                             (*_displacement_soln)(node);
+          wetted_perimeter += 2.0 * (std::sqrt(3.0) / 3.0) * (*_displacement_soln)(node);
         }
-
-        // Calculate subchannel area
-        auto subchannel_area =
-            standard_area + additional_area + displaced_area - rod_area - wire_area;
 
         // Correct subchannel area and wetted perimeter in case of overlapping pins
         auto overlapping_pin_area = 0.0;
