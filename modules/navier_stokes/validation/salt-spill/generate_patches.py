@@ -1,8 +1,8 @@
 # generate_patches_file.py
 
 base_patch = 1
-salt_air = 1024
-air_solid = 1536
+salt_air = 64
+air_solid = 96
 
 # Generate patch names
 salt_air_list = [f"salt_air_iface_{i}" for i in range(salt_air)]
@@ -10,7 +10,7 @@ air_solid_list = [f"air_solid_iface_{i}" for i in range(air_solid)]
 
 # Total emissivities
 total = base_patch + salt_air + air_solid
-emissivities = ["1.0"] * total
+emissivities = ["0.95"] * total
 
 # Build file contents
 content = f"""

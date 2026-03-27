@@ -1,5 +1,7 @@
 ######## FLiNaK material properties #####################
-T_initial = 876.15 #Initial temperature~[K]
+T_initial = 876.15 #Initial temperature~[K]. Target was 923.15K (650 C) but IR camera measures 876.15 (603 C) at initial time, for Test No. 4
+# salt mass recovered 59 g.
+# 1/4th inch beaker walls.
 T_melt = 735.0 #Melting temperature of salt~[K]
 rho_salt_l = ${fparse 2600 - 0.62*T_initial} #Liquid salt density~[Kg/m3]
 # rho_salt_s = 2199.0 #Kg Solid salt density~[Kg/m3]
@@ -13,6 +15,7 @@ k_salt_l = ${fparse -0.35 + 1.3e-3*T_initial} #Liquid salt thermal conductivity~
 T_solidus = ${T_melt}
 T_liquidus = ${fparse T_solidus + 0.1}
 L = 431000 # Heat of fusion~[J/kg]
+ambient_temperature = 301.15
 
 ######## 316 stainless steel properties ########
 rho_solid=8000.0 #Density of steel container~[kg/m3]
@@ -38,13 +41,13 @@ ambient_boundary = 'external_wall solid_top'
   [patch_bot]
     type = PatchSidesetGenerator
     boundary = 'air_solid_iface'
-    n_patches = 1536
+    n_patches = 96
     input = file
   []
   [patch_wall]
     type = PatchSidesetGenerator
     boundary = 'salt_air_iface'
-    n_patches = 1024
+    n_patches = 64
     input = patch_bot
     partitioner = centroid
     centroid_partitioner_direction = x
@@ -154,7 +157,7 @@ ambient_boundary = 'external_wall solid_top'
   [ic_u_1]
     type = FVConstantIC
     variable = temperature
-    value = 301.15
+    value = ${ambient_temperature}
     block = 'solid'
   []
   [ic_u_2]
@@ -228,7 +231,7 @@ ambient_boundary = 'external_wall solid_top'
     type = ViewFactorObjectSurfaceRadiation
     boundary = '${air_solid_interface} air_top ${salt_air_interface}'
     fixed_temperature_boundary = 'air_top'
-    fixed_boundary_temperatures = '300'
+    fixed_boundary_temperatures = '${ambient_temperature}'
     emissivity = ${emissivities}
     temperature = temperature
     execute_on = 'LINEAR TIMESTEP_BEGIN TIMESTEP_END NONLINEAR'
@@ -267,7 +270,7 @@ ambient_boundary = 'external_wall solid_top'
     type = LinearFVAdvectionDiffusionFunctorDirichletBC
     variable = temperature
     boundary = '${ambient_boundary}'
-    functor = 301.15
+    functor = ${ambient_temperature}
   []
   [radiation_solidwalls]
     type = LinearFVGrayLambert
@@ -284,6 +287,18 @@ ambient_boundary = 'external_wall solid_top'
     coeff_diffusion = ${k_salt_l}
     surface_radiation_object_name = gray_lambert
     boundary = ${salt_air_interface}
+  []
+[]
+
+[VectorPostprocessors]
+  [centerline]
+    type = LineValueSampler
+    start_point = '0 0 0.0188' # height of salt surface 0.01885 m
+    end_point = '0.0254 0 0.0188'
+    num_points = 100
+    variable = 'temperature' # mu_eff mu_t pressure TKE TKED vel_x vel_y vel_z yplus'
+    sort_by = 'x'
+    execute_on = 'FINAL'
   []
 []
 
@@ -328,7 +343,7 @@ ambient_boundary = 'external_wall solid_top'
   type = PIMPLE
   num_iterations = 15
   dt = 0.1
-  end_time = 0.1
+  end_time = 10.0
   should_solve_momentum = false
   should_solve_pressure = false
   energy_system = 'energy_system'
