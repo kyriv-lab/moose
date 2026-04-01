@@ -39,34 +39,24 @@
     boundary = 'air_solid_iface_4'
   []
 
-  # # --- SALT–AIR interface ---
-  # # Total/group radiosity over the salt-side interface (nonzero check)
-  # [salt_air_iface_salt_radiosity]
-  #   type = GrayLambertSurfaceRadiationPP
-  #   surface_radiation_object_name = gray_lambert
-  #   return_type = RADIOSITY
-  #   boundary = '${salt_air_interface}'
-  # []
-
-  # # Net heat flux density on the SALT-side interface (this is the one you care about)
-  # [radiation_salt_air_net_flux]
-  #   type = GrayLambertSurfaceRadiationPP
-  #   surface_radiation_object_name = gray_lambert
-  #   return_type = HEAT_FLUX_DENSITY
-  #   boundary = '${salt_air_interface}'
-  # []
-
   [T_salt_avg]
     type = ElementAverageValue
-    variable = temperature
+    variable = temp_salt
     block = salt
     execute_on = 'INITIAL TIMESTEP_END'
   []
 
   [T_salt_surface_avg]
     type = SideAverageValue
-    variable = temperature
+    variable = temp_salt
     boundary = '${salt_air_interface}'
+    execute_on = 'INITIAL TIMESTEP_END'
+  []
+
+  [T_salt_surface_avg_10]
+    type = SideAverageValue
+    variable = temp_salt
+    boundary = 'salt_air_iface_10'
     execute_on = 'INITIAL TIMESTEP_END'
   []
 

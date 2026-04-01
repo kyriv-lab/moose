@@ -22,11 +22,17 @@ rho_solid=8000.0 #Density of steel container~[kg/m3]
 cp_solid=600.0 #Specific heat capacity~[J/(Kg*K)]
 k_solid=16.0 #Thermal conductivity~[W/(m-k)]
 
+#### 
+h_hot_salt  = ${fparse L + cp_salt_l*(T_initial  - T_liquidus)}
+h_s = 0.0
+
 ambient_boundary = 'external_wall solid_top'
 
 [Problem]
   kernel_coverage_check = false
-  linear_sys_names = 'energy_system u_system v_system w_system p_system'
+  linear_sys_names = 'energy_system solid_energy_system u_system v_system w_system p_system'
+  material_coverage_check = false
+  previous_nl_solution_required = true
 []
 
 [GlobalParams]
@@ -41,16 +47,18 @@ ambient_boundary = 'external_wall solid_top'
   [patch_bot]
     type = PatchSidesetGenerator
     boundary = 'air_solid_iface'
-    n_patches = 96
+    n_patches = 60
     input = file
+    partitioner = centroid
+    centroid_partitioner_direction = z
   []
   [patch_wall]
     type = PatchSidesetGenerator
     boundary = 'salt_air_iface'
-    n_patches = 64
+    n_patches = 60
     input = patch_bot
     partitioner = centroid
-    centroid_partitioner_direction = x
+    centroid_partitioner_direction = z
   []
   [top_deletion]
     type = BoundaryDeletionGenerator
@@ -62,10 +70,15 @@ ambient_boundary = 'external_wall solid_top'
 !include patches_FLiNaK.i
 
 [Variables]
-  [temperature]
+  [h_salt]
     type = MooseLinearVariableFVReal
-    solver_sys = 'energy_system'
-    block = 'solid salt'
+    solver_sys = energy_system
+    block = 'salt'
+  []
+  [temp_solid]
+    type = MooseLinearVariableFVReal
+    solver_sys = solid_energy_system
+    block = 'solid'
   []
   [vel_x]
     type = MooseLinearVariableFVReal
@@ -94,36 +107,82 @@ ambient_boundary = 'external_wall solid_top'
 []
 
 [AuxVariables]
+  [radiation_temperature]
+    type = MooseVariableFVReal
+    block = 'salt solid'
+  []
   [fl]
     type = MooseVariableFVReal
     initial_condition = 1.0
     block = salt
   []
+  [temp_salt]
+    type = MooseLinearVariableFVReal
+    block = salt
+  []
+  [T_interface]
+    type = MooseLinearVariableFVReal
+  []
+  [k_eff]
+    type = MooseVariableFVReal
+  []
 []
 
 [AuxKernels]
-  [compute_fl]
-    type = NSLiquidFractionAux
-    variable = fl
-    temperature = temperature
-    T_liquidus = '${T_liquidus}'
-    T_solidus = '${T_solidus}'
-    execute_on = 'TIMESTEP_END'
+  [T_from_h]
+    type = FunctorAux
+    functor = 'T_from_p_h'
+    variable = 'temp_salt'
     block = salt
+    execute_on = 'INITIAL TIMESTEP_END'
+  []
+  [fl_from_h]
+    type = FunctorAux
+    functor = 'liquid_fraction'
+    variable = 'fl'
+    block = salt
+    execute_on = 'INITIAL TIMESTEP_END'
+  []
+  [k_eff_from_h]
+    type = FunctorAux
+    functor = 'kappa_h_salt'
+    variable = 'k_eff'
+    block = salt
+    execute_on = 'INITIAL TIMESTEP_END'
+  []
+  [copy_T_salt]
+    type = ProjectionAux
+    v = 'temp_salt'
+    variable = radiation_temperature
+    block = salt
+    execute_on = 'INITIAL LINEAR NONLINEAR TIMESTEP_BEGIN TIMESTEP_END'
+  []
+  [copy_T_solid]
+    type = ProjectionAux
+    v = 'temp_solid'
+    variable = radiation_temperature
+    block = solid
+    execute_on = 'INITIAL LINEAR NONLINEAR TIMESTEP_BEGIN TIMESTEP_END'
   []
 []
 
 [FVICs]
   [ic_u_1]
     type = FVConstantIC
-    variable = temperature
+    variable = temp_solid
     value = ${ambient_temperature}
     block = 'solid'
   []
   [ic_u_2]
     type = FVConstantIC
-    variable = temperature
+    variable = temp_salt
     value = ${T_initial}
+    block = 'salt'
+  []
+  [ic_u_3]
+    type = FVConstantIC
+    variable = h_salt
+    value = ${h_hot_salt}
     block = 'salt'
   []
 []
@@ -149,39 +208,29 @@ ambient_boundary = 'external_wall solid_top'
     block = salt
     use_nonorthogonal_correction = false
   []
-
-  [temp_time_salt]
+  [h_time]
     type = LinearFVTimeDerivative
-    variable = temperature
-    factor = ${fparse rho_salt_l*cp_salt_l}
+    variable = h_salt
+    factor = ${rho_salt_l}
     block = salt
   []
-  [temp_conduction_salt]
+  [conduction]
     type = LinearFVDiffusion
-    diffusion_coeff = ${k_salt_l}
-    variable = temperature
+    variable = h_salt
+    diffusion_coeff = 'kappa_h_salt'
+    use_nonorthogonal_correction = false
     block = salt
   []
-  [temp_phasechange_source]
-    type = LinearFVPhaseChangeSource
-    variable = temperature
-    L = ${L}
-    T_liquidus = ${T_liquidus}
-    T_solidus = ${T_solidus}
-    rho = ${rho_salt_l}
-    block = salt
-  []
-
   [temp_time_solid]
     type = LinearFVTimeDerivative
-    variable = temperature
+    variable = temp_solid
     factor = ${fparse rho_solid*cp_solid}
     block = solid
   []
   [temp_conduction_solid]
     type = LinearFVDiffusion
     diffusion_coeff = ${k_solid}
-    variable = temperature
+    variable = temp_solid
     block = solid
   []
 []
@@ -193,7 +242,7 @@ ambient_boundary = 'external_wall solid_top'
     fixed_temperature_boundary = 'air_top'
     fixed_boundary_temperatures = '${ambient_temperature}'
     emissivity = ${emissivities}
-    temperature = temperature
+    temperature = radiation_temperature
     execute_on = 'LINEAR TIMESTEP_BEGIN TIMESTEP_END NONLINEAR'
   []
 
@@ -228,25 +277,94 @@ ambient_boundary = 'external_wall solid_top'
   # temperature BCs
   [ambient]
     type = LinearFVAdvectionDiffusionFunctorDirichletBC
-    variable = temperature
+    variable = temp_solid
     boundary = '${ambient_boundary}'
     functor = ${ambient_temperature}
   []
   [radiation_solidwalls]
     type = LinearFVGrayLambert
-    variable = temperature
-    temperature_radiation = temperature
+    variable = temp_solid
+    temperature_radiation = radiation_temperature
     coeff_diffusion = ${k_solid}
     surface_radiation_object_name = gray_lambert
     boundary = ${air_solid_interface}
+    reconstruct_emission = false
   []
-  [radiation_salt_air_interface]
+  [radiation_salt_air_iface]
     type = LinearFVGrayLambert
-    variable = temperature
-    temperature_radiation = temperature
-    coeff_diffusion = ${k_salt_l}
+    variable = h_salt
+    temperature_radiation = radiation_temperature
+    coeff_diffusion = 'kappa_h_salt'
     surface_radiation_object_name = gray_lambert
     boundary = ${salt_air_interface}
+    reconstruct_emission = false # don't change
+  []
+  # [radiation_salt_air_iface]
+  #   type = LinearFVAdvectionDiffusionFunctorNeumannBC
+  #   variable = h_salt #radiation_temperature
+  #   boundary = ${salt_air_interface}
+  #   functor = -18000.0
+  # []
+  # cht
+  [fluid_solid]
+    type = LinearFVRobinCHTBC
+    variable = h_salt
+    boundary = salt_solid_wall
+    h = ${h_s}
+    thermal_conductivity = ${k_solid}
+    incoming_flux = heat_flux_to_fluid_salt_solid_wall
+    surface_temperature = interface_temperature_fluid_salt_solid_wall
+  []
+  [solid_fluid]
+    type = LinearFVDirichletCHTBC
+    variable = temp_solid
+    boundary = salt_solid_wall
+    functor = temp_salt
+  []
+[]
+
+[FunctorMaterials]
+  [phase_change_enthalpy]
+    type = INSFVPhaseChangeEnthalpyFunctorMaterial
+    cp_solid = ${cp_salt_l}
+    cp_liquid = ${cp_salt_l}
+    L = ${L}
+    T_solidus = ${T_solidus}
+    T_liquidus = ${T_liquidus}
+
+    # This 'temperature' input is used only for h_from_p_T. We do not use h_from_p_T
+    # in this file (wall enthalpies are prescribed directly), so a dummy constant is fine.
+    temperature = '${T_solidus}'
+
+    enthalpy = h_salt
+    block = salt
+  []
+  [kappa_h_salt]
+    type = ParsedFunctorMaterial
+    property_name = 'kappa_h_salt'
+    functor_names = 'dTdh'#'k_mixture dTdh'
+    functor_symbols = 'dTdh'
+    expression = '${k_salt_l}*dTdh'
+    block = salt
+  []
+  [enthalpy_cht_functor]
+    type = INSFVPhaseChangeEnthalpyFunctorMaterial
+    h_from_p_T_name = 'interface_enthalpy_solid_salt_solid_wall'
+    T_from_p_h_name = T_from_p_h_cht
+    liquid_fraction_name = liquid_fraction_cht
+    dTdh_name = dTdh_cht
+    cp_solid = ${cp_salt_l}
+    cp_liquid = ${cp_salt_l}
+    L = ${L}
+    T_solidus = ${T_solidus}
+    T_liquidus = ${T_liquidus}
+
+    # This 'temperature' input is used only for h_from_p_T. We do not use h_from_p_T
+    # in this file (wall enthalpies are prescribed directly), so a dummy constant is fine.
+    temperature = 'interface_temperature_solid_salt_solid_wall'
+
+    enthalpy = ${h_hot_salt} #Dummy value
+    # block = solid
   []
 []
 
@@ -254,30 +372,44 @@ ambient_boundary = 'external_wall solid_top'
   type = PIMPLE
   num_iterations = 20
   dt = 0.02
-  end_time = 0.4
+  end_time = 90
   should_solve_momentum = false
   should_solve_pressure = false
   energy_system = 'energy_system'
-  energy_l_abs_tol = 5e-8
-  energy_l_tol = 1e-10
-  energy_equation_relaxation = 0.8
-  energy_field_relaxation = 0.8
-  energy_absolute_tolerance = 5e-8
+  solid_energy_system = 'solid_energy_system'
+  energy_l_abs_tol = 1e-6
+  energy_l_tol = 1e-8
+  energy_equation_relaxation = 0.2
+  energy_field_relaxation = 0.2
+  energy_absolute_tolerance = 1e-6
   energy_petsc_options_iname = '-pc_type -pc_hypre_type'
   energy_petsc_options_value = 'hypre boomeramg'
+  solid_energy_l_abs_tol = 1e-6
+  solid_energy_l_tol = 1e-8
+  solid_energy_absolute_tolerance = 1e-6
+  solid_energy_petsc_options_iname = '-pc_type -pc_hypre_type'
+  solid_energy_petsc_options_value = 'hypre boomeramg'
   print_fields = false
   continue_on_max_its = true
 
   rhie_chow_user_object = 'rc'
   momentum_systems = 'u_system v_system w_system'
   pressure_system = 'p_system'
+
+  cht_interfaces = 'salt_solid_wall'
+  cht_solid_flux_relaxation = 0.5
+  cht_fluid_flux_relaxation = 0.5
+  cht_solid_temperature_relaxation = 0.3
+  cht_fluid_temperature_relaxation = 0.3
+  cht_heat_flux_tolerance = 1e-3
+  max_cht_fpi = 5
 []
 
 [Outputs]
   exodus = true
   [out]
     type = CSV
-    sync_times = '0.4 10 90'
+    sync_times = '10 90'
     sync_only = true
   []
 []
@@ -288,10 +420,10 @@ ambient_boundary = 'external_wall solid_top'
     start_point = '0 0 0.0188' # height of salt surface 0.01885 m
     end_point = '0.0254 0 0.0188'
     num_points = 100
-    variable = 'temperature' # mu_eff mu_t pressure TKE TKED vel_x vel_y vel_z yplus'
+    variable = 'temp_salt' # mu_eff mu_t pressure TKE TKED vel_x vel_y vel_z yplus'
     sort_by = 'x'
     execute_on = 'TIMESTEP_END FINAL'
   []
 []
 
-!include PP_FLiNaK.i
+!include PP_FLiNaK_cht.i

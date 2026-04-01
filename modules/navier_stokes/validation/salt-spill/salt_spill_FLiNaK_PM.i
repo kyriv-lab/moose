@@ -16,6 +16,9 @@ T_solidus = ${T_melt}
 T_liquidus = ${fparse T_solidus + 0.1}
 L = 431000 # Heat of fusion~[J/kg]
 ambient_temperature = 301.15
+emissivity= 0.95
+sigma_a = 276 # m^-1
+diffusion_coef = ${fparse 1/(3*sigma_a)}
 
 ######## 316 stainless steel properties ########
 rho_solid=8000.0 #Density of steel container~[kg/m3]
@@ -26,7 +29,8 @@ ambient_boundary = 'external_wall solid_top'
 
 [Problem]
   kernel_coverage_check = false
-  linear_sys_names = 'energy_system u_system v_system w_system p_system'
+  linear_sys_names = 'energy_system u_system v_system w_system p_system radiation_system'
+  previous_nl_solution_required = true
 []
 
 [GlobalParams]
@@ -90,6 +94,12 @@ ambient_boundary = 'external_wall solid_top'
     solver_sys = 'p_system'
     initial_condition = 0
     block = salt
+  []
+  [G]
+    type = MooseLinearVariableFVReal
+    solver_sys = 'radiation_system'
+    initial_condition = ${fparse 4*sigma_a*pow(T_initial,4)}
+    block = 'salt'
   []
 []
 
@@ -156,12 +166,14 @@ ambient_boundary = 'external_wall solid_top'
     factor = ${fparse rho_salt_l*cp_salt_l}
     block = salt
   []
+
   [temp_conduction_salt]
     type = LinearFVDiffusion
     diffusion_coeff = ${k_salt_l}
     variable = temperature
     block = salt
   []
+
   [temp_phasechange_source]
     type = LinearFVPhaseChangeSource
     variable = temperature
@@ -178,11 +190,36 @@ ambient_boundary = 'external_wall solid_top'
     factor = ${fparse rho_solid*cp_solid}
     block = solid
   []
+
   [temp_conduction_solid]
     type = LinearFVDiffusion
     diffusion_coeff = ${k_solid}
     variable = temperature
     block = solid
+  []
+
+  ### G conservation equation
+  [fluid_radiation]
+    type = LinearFVP1TemperatureSourceSink
+    variable = temperature
+    G = 'G'
+    absorption_coeff = ${sigma_a}
+    block = salt
+  []
+
+  [G_diffusion]
+    type = LinearFVDiffusion
+    variable = G
+    diffusion_coeff = ${diffusion_coef}
+    block = salt
+  []
+
+  [G_source_and_sink]
+    type = LinearFVP1RadiationSourceSink
+    variable = G
+    temperature_radiation = temperature
+    absorption_coeff = ${sigma_a}
+    block = salt
   []
 []
 
@@ -202,8 +239,8 @@ ambient_boundary = 'external_wall solid_top'
     execute_on = INITIAL
     boundary = '${air_solid_interface} air_top ${salt_air_interface}'
     face_order = CONSTANT
-    polar_quad_order = 16
-    azimuthal_quad_order = 16
+    polar_quad_order = 8
+    azimuthal_quad_order = 8
     face_type = GAUSS
     warn_non_planar = false
   []
@@ -227,10 +264,12 @@ ambient_boundary = 'external_wall solid_top'
 [LinearFVBCs]
   # temperature BCs
   [ambient]
-    type = LinearFVAdvectionDiffusionFunctorDirichletBC
+    type = LinearFVFunctorRadiativeBC
     variable = temperature
     boundary = '${ambient_boundary}'
-    functor = ${ambient_temperature}
+    emissivity = ${emissivity}
+    Tinfinity = ${ambient_temperature}
+    diffusion_coeff =  ${k_solid}
   []
   [radiation_solidwalls]
     type = LinearFVGrayLambert
@@ -248,23 +287,60 @@ ambient_boundary = 'external_wall solid_top'
     surface_radiation_object_name = gray_lambert
     boundary = ${salt_air_interface}
   []
+  ### G BCs
+  [solid_walls_bc_G]
+    type = LinearFVP1RadiationMarshakBC
+    boundary = 'salt_solid_wall'
+    variable = G
+    temperature_radiation = temperature
+    coeff_diffusion = ${diffusion_coef}
+    boundary_emissivity = ${emissivity}
+  []
+
+  [salt_air_IF_bc_G]
+    type = LinearFVP1RadiationMarshakBC
+    boundary = ${salt_air_interface}
+    variable = G
+    temperature_radiation = temperature
+    coeff_diffusion = ${diffusion_coef}
+    boundary_emissivity = ${emissivity}
+  []
+[]
+
+[VectorPostprocessors]
+  [radial]
+    type = LineValueSampler
+    start_point = '0 0 0.01884' # height of salt surface 0.01885 m
+    end_point = '0.0254 0 0.01884'
+    num_points = 100
+    variable = 'temperature'
+    sort_by = 'x'
+    execute_on = 'TIMESTEP_END FINAL'
+  []
 []
 
 [Executioner]
   type = PIMPLE
   num_iterations = 20
-  dt = 0.02
-  end_time = 0.4
+  dt = 0.1
+  end_time = 10.0
   should_solve_momentum = false
   should_solve_pressure = false
+  pm_radiation_systems = 'radiation_system'
   energy_system = 'energy_system'
+  pm_radiation_l_abs_tol = 1e-11
+  pm_radiation_l_tol = 0
   energy_l_abs_tol = 5e-8
   energy_l_tol = 1e-10
+  pm_radiation_equation_relaxation = 1.0
   energy_equation_relaxation = 0.8
   energy_field_relaxation = 0.8
   energy_absolute_tolerance = 5e-8
+  pm_radiation_absolute_tolerance = 1e-10
   energy_petsc_options_iname = '-pc_type -pc_hypre_type'
   energy_petsc_options_value = 'hypre boomeramg'
+  pm_radiation_petsc_options_iname = '-pc_type -pc_hypre_type'
+  pm_radiation_petsc_options_value = 'hypre boomeramg'
   print_fields = false
   continue_on_max_its = true
 
@@ -277,20 +353,8 @@ ambient_boundary = 'external_wall solid_top'
   exodus = true
   [out]
     type = CSV
-    sync_times = '0.4 10 90'
+    sync_times = '10 90'
     sync_only = true
-  []
-[]
-
-[VectorPostprocessors]
-  [centerline]
-    type = LineValueSampler
-    start_point = '0 0 0.0188' # height of salt surface 0.01885 m
-    end_point = '0.0254 0 0.0188'
-    num_points = 100
-    variable = 'temperature' # mu_eff mu_t pressure TKE TKED vel_x vel_y vel_z yplus'
-    sort_by = 'x'
-    execute_on = 'TIMESTEP_END FINAL'
   []
 []
 

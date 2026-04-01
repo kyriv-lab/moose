@@ -9,8 +9,8 @@ height_air = ${fparse 3*2.54/100 - height_salt}
   [base]
     type = ConcentricCircleMeshGenerator
     num_sectors = 24
-    radii = '${fparse 0.95*int_rad} ${int_rad} ${ext_rad}'
-    rings = '12 6 8'
+    radii = '${fparse 0.80*int_rad} ${int_rad} ${ext_rad}'
+    rings = '20 12 15'
     has_outer_square = off
     pitch = 1.42063
     preserve_volumes = off

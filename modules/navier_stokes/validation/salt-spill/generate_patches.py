@@ -1,8 +1,8 @@
 # generate_patches_file.py
 
 base_patch = 1
-salt_air = 64
-air_solid = 96
+salt_air = 60
+air_solid = 60
 
 # Generate patch names
 salt_air_list = [f"salt_air_iface_{i}" for i in range(salt_air)]
