@@ -73,10 +73,9 @@ Real
 LinearFVAdvectionDiffusionFunctorRobinBCBase::computeBoundaryValueMatrixContribution() const
 {
   const auto face = singleSidedFaceArg(_current_face_info);
-  const auto state = determineState();
   const auto old_state = Moose::previousNonlinearState();
 
-  const auto alpha = getAlpha(face, state);
+  const auto alpha = getAlpha(face, old_state);
   const auto beta = getBeta(face, old_state);
   const auto & nhat = _current_face_info->normal();
 
@@ -118,7 +117,6 @@ Real
 LinearFVAdvectionDiffusionFunctorRobinBCBase::computeBoundaryGradientMatrixContribution() const
 {
   const auto face = singleSidedFaceArg(_current_face_info);
-  const auto state = determineState();
   const auto old_state = Moose::previousNonlinearState();
 
   const auto alpha = getAlpha(face, old_state);

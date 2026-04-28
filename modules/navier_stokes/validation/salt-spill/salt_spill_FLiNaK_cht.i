@@ -22,7 +22,7 @@ rho_solid=8000.0 #Density of steel container~[kg/m3]
 cp_solid=600.0 #Specific heat capacity~[J/(Kg*K)]
 k_solid=16.0 #Thermal conductivity~[W/(m-k)]
 
-#### 
+####
 h_hot_salt  = ${fparse L + cp_salt_l*(T_initial  - T_liquidus)}
 h_s = 0.0
 
@@ -291,13 +291,14 @@ ambient_boundary = 'external_wall solid_top'
     reconstruct_emission = false
   []
   [radiation_salt_air_iface]
-    type = LinearFVGrayLambert
+    type = LinearFVGrayLambertEnthalpyBC
     variable = h_salt
-    temperature_radiation = radiation_temperature
+    temperature_radiation = T_from_p_h
+    dTdh = dTdh
     coeff_diffusion = 'kappa_h_salt'
     surface_radiation_object_name = gray_lambert
     boundary = ${salt_air_interface}
-    reconstruct_emission = false # don't change
+    reconstruct_emission = true
   []
   # [radiation_salt_air_iface]
   #   type = LinearFVAdvectionDiffusionFunctorNeumannBC
@@ -371,7 +372,7 @@ ambient_boundary = 'external_wall solid_top'
 [Executioner]
   type = PIMPLE
   num_iterations = 20
-  dt = 0.02
+  dt = 0.1
   end_time = 90
   should_solve_momentum = false
   should_solve_pressure = false

@@ -313,13 +313,14 @@ air_solid_iface = 'air_solid_iface'# air_solid_iface_1 air_solid_iface_2 air_sol
     reconstruct_emission = false
   [../]
   [./radiation_salt_air_iface]
-    type = LinearFVGrayLambert
+    type = LinearFVGrayLambertEnthalpyBC
     variable = h_salt
-    temperature_radiation = radiation_temperature
+    temperature_radiation = T_from_p_h
+    dTdh = dTdh
     coeff_diffusion = 'kappa_h_salt'
     surface_radiation_object_name = gray_lambert
     boundary = ${salt_air_iface}
-    reconstruct_emission = false
+    reconstruct_emission = true
   [../]
 
   # cht
