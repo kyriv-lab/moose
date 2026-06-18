@@ -17,17 +17,12 @@ registerMooseObject("MooseApp", JSONFileReader);
 InputParameters
 JSONFileReader::validParams()
 {
-  InputParameters params = GeneralUserObject::validParams();
-  // Add parameters
-  params.addRequiredParam<FileName>("filename", "The path to the file including its name");
-  // we run this object once at the initialization by default
-  params.set<ExecFlagEnum>("execute_on") = EXEC_INITIAL;
+  InputParameters params = JSONFileReaderBase::validParams();
   params.addClassDescription("Loads a JSON file and makes it content available to consumers");
   return params;
 }
 
-JSONFileReader::JSONFileReader(const InputParameters & parameters)
-  : GeneralUserObject(parameters), _filename(getParam<FileName>("filename"))
+JSONFileReader::JSONFileReader(const InputParameters & parameters) : JSONFileReaderBase(parameters)
 {
   read(_filename);
 }

@@ -9,7 +9,7 @@
 
 #include "PiecewiseTabularInterface.h"
 #include "DelimitedFileReader.h"
-#include "JSONFileReader.h"
+#include "JSONFileReaderBase.h"
 
 #include "libmesh/int_range.h"
 
@@ -44,7 +44,7 @@ PiecewiseTabularInterface::validParams()
       "format", format, "Format of csv data file that is in either in columns or rows");
 
   // Data from JSON parameters
-  params.addParam<UserObjectName>("json_uo", "JSONFileReader holding the data");
+  params.addParam<UserObjectName>("json_uo", "JSONFileReader or YAMLFileReader holding the data");
   params.addParam<std::vector<std::string>>(
       "x_keys", "Ordered vector of keys in the JSON tree to obtain the abscissa");
   params.addParam<std::vector<std::string>>(
@@ -194,7 +194,7 @@ PiecewiseTabularInterface::buildFromFile(const libMesh::Parallel::Communicator &
 }
 
 void
-PiecewiseTabularInterface::buildFromJSON(const JSONFileReader & json_uo)
+PiecewiseTabularInterface::buildFromJSON(const JSONFileReaderBase & json_uo)
 {
   if (!_parameters.isParamValid("x_keys"))
     _object.mooseError("Missing 'x_keys' parameters for loading data from JSON");

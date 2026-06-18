@@ -12,7 +12,7 @@
 #include "MooseObject.h"
 #include "InputParameters.h"
 
-class JSONFileReader;
+class JSONFileReaderBase;
 
 class PiecewiseTabularInterface
 {
@@ -30,8 +30,8 @@ protected:
   /// Reads data from supplied CSV file.
   void buildFromFile(const libMesh::Parallel::Communicator & comm);
 
-  /// Reads data from supplied JSON reader.
-  void buildFromJSON(const JSONFileReader & json_uo);
+  /// Reads data from a supplied JSON or YAML reader.
+  void buildFromJSON(const JSONFileReaderBase & json_uo);
 
   /// Builds data from 'x' and 'y' parameters.
   void buildFromXandY();

@@ -8,7 +8,7 @@
 //* https://www.gnu.org/licenses/lgpl-2.1.html
 
 #include "PiecewiseTabularBase.h"
-#include "JSONFileReader.h"
+#include "JSONFileReaderBase.h"
 
 InputParameters
 PiecewiseTabularBase::validParams()
@@ -46,5 +46,5 @@ PiecewiseTabularBase::initialSetup()
   if (!isParamValid("json_uo"))
     return;
   else
-    buildFromJSON(getUserObject<JSONFileReader>("json_uo"));
+    buildFromJSON(getUserObject<JSONFileReaderBase>("json_uo"));
 }

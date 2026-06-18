@@ -26,6 +26,14 @@
                   "y-data loaded from a JSON file."
   []
 
+  [piecewise_constant_from_yaml]
+    type = CSVDiff
+    input = 'piecewise_constant_yaml.i'
+    csvdiff = 'piecewise_constant_yaml_out.csv'
+    requirement = "The system shall be able to compute a piecewise constant function based on x- and "
+                  "y-data loaded from a YAML file."
+  []
+
   [errors]
     requirement = "The system shall report an error if"
     [param_meant_for_file]
