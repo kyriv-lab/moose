@@ -2,8 +2,8 @@
 # Used to loosely couple THM with SCM
 # This is a simple open loop with fixed massflow at the inlet and pressure at the outlet.
 # THM sends massflux and temperature at the inlet of the core, and pressure at the outlet of the core
-# to subchannel. Subchannel returns total pressure drop of the assembly and total power to THM and THM calculates an
-# average friction factor for the core region.
+# to subchannel. THM sends the core fluid power balance to subchannel. Subchannel returns total
+# pressure drop of the assembly and THM calculates an average friction factor for the core region.
 T_in = 583.0 # K
 m_dot_in = 1 # kg/s
 press = 2e5 # Pa
@@ -69,13 +69,14 @@ m_dot_sec_in = 1. # kg/s
 
   [sodium_eos]
     type = StiffenedGasFluidProperties
+    # Tuned to PBSodiumFluidProperties at T = 583 K and p = 2e5 Pa.
     gamma = 1.24
-    cv = 1052.8
-    q = -2.6292e+05
-    p_inf = 1.1564e+08
+    cv = 1035.82646831532
+    q = -3116.82080158673
+    p_inf = 1.26728106160917e+08
     q_prime = 0
-    mu = 3.222e-04
-    k = 73.82
+    mu = 3.32285070101682e-04
+    k = 77.2463923999921
   []
 []
 
@@ -346,6 +347,28 @@ m_dot_sec_in = 1. # kg/s
     P_hf = 1
   []
 
+  [core_energy_in]
+    type = ADFlowJunctionFlux1Phase
+    boundary = core_chan:in
+    connection_index = 1
+    equation = energy
+    junction = jct1
+  []
+
+  [core_energy_out]
+    type = ADFlowJunctionFlux1Phase
+    boundary = core_chan:out
+    connection_index = 0
+    equation = energy
+    junction = jct2
+  []
+
+  [core_fluid_power]
+    type = ParsedPostprocessor
+    pp_names = 'core_energy_in core_energy_out'
+    expression = 'abs(core_energy_out) - abs(core_energy_in)'
+  []
+
   [core_T_out]
     type = SideAverageValue
     boundary = core_chan:out
@@ -462,9 +485,11 @@ m_dot_sec_in = 1. # kg/s
     type = Receiver
     default = 100
   []
+  #####
+  ##### Imposed core power in THM
   [core_power]
-    type = Receiver
-    default = 100
+    type = ConstantPostprocessor
+    value = 10000
   []
 []
 
@@ -481,9 +506,9 @@ m_dot_sec_in = 1. # kg/s
 
   [TimeStepper]
     type = IterationAdaptiveDT
-    dt = 0.01
+    dt = 1
   []
-  # dtmax = 5
+  dtmax = 1
   end_time = 5
 
   line_search = basic
@@ -534,12 +559,11 @@ m_dot_sec_in = 1. # kg/s
     execute_on = 'timestep_end'
   []
 
-  [power_transfer] # Get Total power to THM from subchannel
+  [power_transfer] # Send core fluid power balance from THM to subchannel
     type = MultiAppPostprocessorTransfer
-    from_multi_app = subchannel
-    from_postprocessor = Total_power
-    to_postprocessor = core_power
-    reduction_type = average
+    to_multi_app = subchannel
+    from_postprocessor = core_fluid_power
+    to_postprocessor = report_power
     execute_on = 'timestep_end'
   []
 

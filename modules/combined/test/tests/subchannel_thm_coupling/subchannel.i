@@ -82,13 +82,6 @@ heated_length = 1.0
     variable = w_perim
   []
 
-  [q_prime_IC]
-    type = SCMTriPowerIC
-    variable = q_prime
-    power = 10000 #W
-    filename = "pin_power_profile19.txt"
-  []
-
   [T_ic]
     type = ConstantIC
     variable = T
@@ -156,6 +149,13 @@ heated_length = 1.0
     execute_on = 'timestep_begin'
     block = subchannel
   []
+  [q_prime]
+    type = SCMTriPowerAux
+    variable = q_prime
+    power = report_power
+    filename = "pin_power_profile19.txt"
+    execute_on = 'initial timestep_begin'
+  []
 []
 
 [Outputs]
@@ -163,7 +163,9 @@ heated_length = 1.0
 []
 
 [Executioner]
-  type = Steady
+  type = Transient
+  dt = 1
+  end_time = 1
 []
 
 [Postprocessors]
@@ -200,6 +202,11 @@ heated_length = 1.0
   [report_pressure_outlet]
     type = Receiver
     default = ${P_out}
+  []
+
+  [report_power]
+    type = Receiver
+    default = 10000
   []
 []
 
