@@ -367,7 +367,7 @@ From the axial- and cross-momentum rows, the code forms quick, diagonally precon
 \end{equation}
 with small safeguards $\varepsilon_p,\varepsilon_W\sim 10^{-10}$ to avoid division by zero. Using $\hat{\mathbf W}$, the per-channel crossflow sum $\sum_{j} w_{ij}$ is assembled into a vector $\mathrm{sumw_{ij}}_{\mathrm{loc}}$.
 
-#### 2. Crossflow relaxation parameter
+#### 2. Crossflow update and redistribution indicators
 
 !! Intentional comment to provide extra spacing
 
@@ -380,15 +380,22 @@ S_{\max} &= \max\Big(\max |\mathrm{sumw_{ijloc}}|,\; 10^{-10}\Big)
 \end{aligned}
 \end{equation}
 
-Additionally, a mean inter-iteration change for crossflow is formed
+The monolithic solve tracks two indicators from the previous nonlinear update. The first
+is a normalized crossflow update ratio,
 \begin{equation}
-r_{\mathrm{base}} = \operatorname{mean}\big(\big|\mathbf W^{(k)}| - |\mathbf W^{(k-1)}\big|\big),
+q_W =
+\frac{\operatorname{mean}\left(\left|\mathbf W^{(k)} - \mathbf W^{(k-1)}\right|\right)}
+{\max\left(\max\left|\mathbf W^{(k)}\right|,\varepsilon\right)},
 \end{equation}
-leading to a relaxation factor
+with $\varepsilon\sim10^{-10}$. This quantity is limited to the interval $[0,1]$ and is
+used on the next linear solve. The second is a crossflow-sum redistribution factor,
 \begin{equation}
-r = \frac{r_{\mathrm{base}}}{\max(S_{\max}, \varepsilon)} + 0.5,\qquad \varepsilon\sim10^{-10}.
+c_W = \frac{S_{\max,\mathrm{new}}}{S_{\max,\mathrm{estimate}}}.
 \end{equation}
-The +0.5 offset biases toward mild under-relaxation.
+This factor compares the solved channel-wise crossflow sum with the provisional estimate
+used to size the resistance. It guards against cases where the local crossflow update is
+small but the channel-wise sum of crossflow is still changing enough to destabilize the
+coupled thermal-hydraulic iteration.
 
 #### 3. Crossflow resistance inflation
 
@@ -399,27 +406,28 @@ A cross-coupling resistance is estimated and smoothed:
 \begin{aligned}
 \tilde K   &= \frac{S_{\max}}{m_{\min}}, &
 K^\star &= 0.9\,\tilde K + 0.1\,K_{\text{old}}, &
-K       &= r\,K^\star.
+K       &= q_W\,K^\star.
 \end{aligned}
 \end{equation}
-After smoothing, the provisional crossflow resistance $K$ is mapped through a piecewise lower-bound function that enforces minimum safe damping levels in specific ranges.
+The update ratio therefore reduces the added resistance as the nonlinear crossflow update
+converges. This limits the influence of the artificial crossflow resistance on the final
+solution compared with a fixed lower-bound resistance.
 
 \begin{equation}
-K \rightarrow
+K_{\min} =
 \begin{cases}
-K , & K >= 10, \\
-1.0, & 1 \leq K < 10, \\
-0.5, & 0.1 \leq K < 1, \\
-\frac{1}{3}, & 0.01 \leq K < 0.1, \\
-0.1, & 0.001 \leq K < 0.01, \\
-K, & K < 10^{-3}.
+\min(0.1, K^\star), & c_W < 0.8\ \mathrm{or}\ c_W > 1.25, \\
+0, & 0.8 \leq c_W \leq 1.25,
 \end{cases}
 \end{equation}
+and the applied crossflow resistance is
+\begin{equation}
+K \leftarrow \max(K, K_{\min}).
+\end{equation}
 
-This mapping acts as a {snap-up} rule for the crossflow resistance $K$ over the range $[10^{-3}, 10]$:
-it raises $K$ out of weak-damping intervals but leaves very small and very large
-values unchanged. The purpose is to maintain numerical stability and adequate
-diagonal dominance in the cross-momentum equations without introducing full quantization or "bucketing".
+This guard keeps a small amount of diagonal stabilization when the crossflow-sum
+redistribution is still changing rapidly, while still allowing the added resistance to
+decay in stable iterations.
 
 Finally, $K$ is added to the diagonal of the cross-momentum block,
 \begin{equation}
@@ -448,4 +456,4 @@ This standard construction ensures that solving the modified linear system yield
 
 !! Intentional comment to provide extra spacing
 
-The combination of (i) safeguarded scale estimation, (ii) adaptive, time smoothed, and piecewise snapped added crossflow resistance, and (iii) selective under-relaxation produces a more diagonally dominant and robust nested solve that tolerates rapid changes in crossflow while preserving good convergence properties for mass flow and pressure.
+The combination of (i) safeguarded scale estimation, (ii) adaptive, smoothed, update-decayed, and redistribution-guarded added crossflow resistance, and (iii) selective under-relaxation produces a more diagonally dominant and robust nested solve that tolerates rapid changes in crossflow while reducing the artificial crossflow resistance as the nonlinear crossflow update converges.

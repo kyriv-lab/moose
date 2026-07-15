@@ -410,6 +410,7 @@ protected:
   PetscScalar _max_sumWij;
   PetscScalar _max_sumWij_new;
   PetscScalar _correction_factor = 1.0;
+  PetscScalar _crossflow_update_ratio = 0.5;
 
 public:
   static InputParameters validParams();

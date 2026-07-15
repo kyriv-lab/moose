@@ -2309,34 +2309,31 @@ SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
     LibmeshPetscCall(VecAbs(_Wij_old_loc_vec));
     LibmeshPetscCall(VecAXPY(_Wij_loc_vec, -1.0, _Wij_old_loc_vec));
 
-    PetscScalar relax_factor;
+    PetscScalar previous_timestep_change;
     LibmeshPetscCall(VecAbs(_Wij_loc_vec));
 #if !PETSC_VERSION_LESS_THAN(3, 16, 0)
-    LibmeshPetscCall(VecMean(_Wij_loc_vec, &relax_factor));
+    LibmeshPetscCall(VecMean(_Wij_loc_vec, &previous_timestep_change));
 #else
-    VecSum(_Wij_loc_vec, &relax_factor);
-    relax_factor /= _block_size * _n_gaps;
+    VecSum(_Wij_loc_vec, &previous_timestep_change);
+    previous_timestep_change /= _block_size * _n_gaps;
 #endif
-    relax_factor = relax_factor / _max_sumWij + 0.5;
-    V("Relax base value: " + std::to_string(relax_factor));
+    V("Previous timestep crossflow change: " + std::to_string(previous_timestep_change));
 
     // ---- crossflow resistance inflation ----
     const PetscScalar resistance_relaxation = 0.9;
     _added_K = _max_sumWij / min_mdot;
     V("New cross resistance: " + std::to_string(_added_K));
-    _added_K = (_added_K * resistance_relaxation + (1.0 - resistance_relaxation) * _added_K_old) *
-               relax_factor;
+    const PetscScalar added_K_base =
+        _added_K * resistance_relaxation + (1.0 - resistance_relaxation) * _added_K_old;
+    _added_K = added_K_base * _crossflow_update_ratio;
     V("Relaxed cross resistance: " + std::to_string(_added_K));
-
-    // Snap-up lower-bounding
-    if (_added_K < 10 && _added_K >= 1.0)
-      _added_K = 1.0;
-    if (_added_K < 1.0 && _added_K >= 0.1)
-      _added_K = 0.5;
-    if (_added_K < 0.1 && _added_K >= 0.01)
-      _added_K = 1. / 3.;
-    if (_added_K < 1e-2 && _added_K >= 1e-3)
-      _added_K = 0.1;
+    if (!std::isfinite(_correction_factor) || _correction_factor < 0.8 ||
+        _correction_factor > 1.25)
+    {
+      const PetscScalar minimum_added_K = std::min(PetscScalar(0.1), added_K_base);
+      _added_K = std::max(_added_K, minimum_added_K);
+      V("Guarded cross resistance: " + std::to_string(_added_K));
+    }
     V("Actual added cross resistance: " + std::to_string(_added_K));
     LibmeshPetscCall(VecScale(unity_vec_Wij, _added_K));
     _added_K_old = _added_K;
@@ -2482,6 +2479,36 @@ SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
     }
     LibmeshPetscCall(VecRestoreArray(sol_p, &sol_p_array));
   }
+
+  // Measure the nonlinear crossflow update before overwriting the previous iterate.
+  Vec sol_Wij_old, sol_Wij_update, sol_Wij_abs;
+  LibmeshPetscCall(VecDuplicate(sol_Wij, &sol_Wij_old));
+  LibmeshPetscCall(VecDuplicate(sol_Wij, &sol_Wij_update));
+  LibmeshPetscCall(VecDuplicate(sol_Wij, &sol_Wij_abs));
+  LibmeshPetscCall(populateVectorFromDense<libMesh::DenseMatrix<Real>>(
+      sol_Wij_old, _Wij, first_node, last_node, _n_gaps));
+  LibmeshPetscCall(VecCopy(sol_Wij, sol_Wij_update));
+  LibmeshPetscCall(VecAXPY(sol_Wij_update, -1.0, sol_Wij_old));
+  LibmeshPetscCall(VecAbs(sol_Wij_update));
+  PetscScalar mean_wij_update;
+#if !PETSC_VERSION_LESS_THAN(3, 16, 0)
+  LibmeshPetscCall(VecMean(sol_Wij_update, &mean_wij_update));
+#else
+  VecSum(sol_Wij_update, &mean_wij_update);
+  mean_wij_update /= _block_size * _n_gaps;
+#endif
+  LibmeshPetscCall(VecCopy(sol_Wij, sol_Wij_abs));
+  LibmeshPetscCall(VecAbs(sol_Wij_abs));
+  PetscScalar max_wij;
+  LibmeshPetscCall(VecMax(sol_Wij_abs, NULL, &max_wij));
+  _crossflow_update_ratio = mean_wij_update / std::max(max_wij, 1e-10);
+  if (!std::isfinite(_crossflow_update_ratio))
+    _crossflow_update_ratio = 1.0;
+  _crossflow_update_ratio = std::min(_crossflow_update_ratio, PetscScalar(1.0));
+  V("Crossflow update ratio: " + std::to_string(_crossflow_update_ratio));
+  LibmeshPetscCall(VecDestroy(&sol_Wij_old));
+  LibmeshPetscCall(VecDestroy(&sol_Wij_update));
+  LibmeshPetscCall(VecDestroy(&sol_Wij_abs));
 
   // crossflow dense + sumWij + correction factor
   LibmeshPetscCall(populateDenseFromVector<libMesh::DenseMatrix<Real>>(
