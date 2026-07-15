@@ -339,6 +339,14 @@ protected:
   Vec _Wij_vec;
   Vec _prod;
   Vec _prodp;
+  /// Scratch vectors reused by the monolithic relaxation solve.
+  Vec _relax_mdot_estimate;
+  Vec _relax_pmat_diag;
+  Vec _relax_p_estimate;
+  Vec _relax_unity_channels;
+  Vec _relax_sol_holder_P;
+  Vec _relax_added_K_vec;
+  Vec _relax_sumWij_loc;
   /// Mass conservation - axial convection
   Mat _mc_axial_convection_mat;
   Vec _mc_axial_convection_rhs;
