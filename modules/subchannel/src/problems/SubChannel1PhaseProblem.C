@@ -2327,8 +2327,7 @@ SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
         _added_K * resistance_relaxation + (1.0 - resistance_relaxation) * _added_K_old;
     _added_K = added_K_base * _crossflow_update_ratio;
     V("Relaxed cross resistance: " + std::to_string(_added_K));
-    if (!std::isfinite(_correction_factor) || _correction_factor < 0.8 ||
-        _correction_factor > 1.25)
+    if (!std::isfinite(_correction_factor) || _correction_factor < 0.8 || _correction_factor > 1.25)
     {
       const PetscScalar minimum_added_K = std::min(PetscScalar(0.1), added_K_base);
       _added_K = std::max(_added_K, minimum_added_K);
