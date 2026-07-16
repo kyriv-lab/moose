@@ -31,9 +31,18 @@ heated_length = 1.0
   []
 []
 
+[Functions]
+  [axial_heat_rate]
+    type = ParsedFunction
+    expression = '(pi/2)*sin(pi*z/L)'
+    symbol_names = 'L'
+    symbol_values = '${heated_length}'
+  []
+[]
+
 [FluidProperties]
   [Sodium]
-    type = PBSodiumFluidProperties
+    type = SodiumSaturationFluidProperties
   []
 []
 
@@ -71,7 +80,10 @@ heated_length = 1.0
   []
 []
 
-[ICs]
+[ICs] # Initial conditions
+  ## Geometric variables
+  ## these variables can be set by default. SCM will use the kernels listed below by default.
+  ## But the user can use other custom kernels in the input that will produce non-default values.
   [S_IC]
     type = SCMTriFlowAreaIC
     variable = S
@@ -82,22 +94,30 @@ heated_length = 1.0
     variable = w_perim
   []
 
-  [T_ic]
-    type = ConstantIC
-    variable = T
-    value = ${T_in}
-  []
-
   [Dpin_ic]
     type = ConstantIC
     variable = Dpin
     value = ${fuel_pin_diameter}
   []
 
+  ## If an auxvariable is not set it will take the default value of 0
   [P_ic]
     type = ConstantIC
     variable = P
     value = 0.0
+  []
+
+  [mdot_ic]
+    type = ConstantIC
+    variable = mdot
+    value = 0.0
+  []
+
+  ## What needs to be set are the following
+  [T_ic]
+    type = ConstantIC
+    variable = T
+    value = ${T_in}
   []
 
   [Viscosity_ic]
@@ -124,17 +144,21 @@ heated_length = 1.0
     fp = Sodium
   []
 
-  [mdot_ic]
-    type = ConstantIC
-    variable = mdot
-    value = 0.0
+  # IC's are only called once, so if i want to redifine power i need an auxkernel
+  [q_prime_IC]
+    type = SCMTriPowerIC
+    variable = q_prime
+    power = 10000 # W
+    filename = "pin_power_profile19.txt"
+    axial_heat_rate = axial_heat_rate
   []
 []
 
+## Boundary conditions
 [AuxKernels]
   [T_in_bc]
     type = FunctorAux
-    functor = report_temperature_inlet
+    functor = report_temperature_inlet #I can read in post-processor values
     variable = T
     boundary = inlet
     execute_on = 'timestep_begin'
@@ -145,27 +169,39 @@ heated_length = 1.0
     variable = mdot
     boundary = inlet
     area = S
-    mass_flux = report_mass_flux_inlet
+    mass_flux = report_mass_flux_inlet #I can read in post-processor values
     execute_on = 'timestep_begin'
     block = subchannel
   []
-  [q_prime]
-    type = SCMTriPowerAux
-    variable = q_prime
-    power = report_power
-    filename = "pin_power_profile19.txt"
-    execute_on = 'initial timestep_begin'
-  []
+  # [q_prime]
+  #   type = SCMTriPowerAux
+  #   variable = q_prime
+  #   power = report_power
+  #   filename = "pin_power_profile19.txt"
+  #   execute_on = 'initial timestep_begin'
+  #   axial_heat_rate = axial_heat_rate
+  # []
 []
 
 [Outputs]
-  csv = true
+  csv = true ## I want to have a .csv file output
+  exodus = true
 []
 
-[Executioner]
-  type = Transient
-  dt = 1
-  end_time = 1
+# [Executioner]
+#   # type = Transient
+#   # dt = 1
+#   # end_time = 1 #10 if i want sychronized transient
+#   type = Steady
+# []
+
+[Executioner] ## This is if i want to define picard iterations
+  type = Steady
+  petsc_options_iname = '-pc_type -pc_hypre_type'
+  petsc_options_value = 'hypre boomeramg'
+  fixed_point_max_its = 8
+  fixed_point_min_its = 6
+  fixed_point_rel_tol = 1e-6
 []
 
 [Postprocessors]
@@ -175,45 +211,63 @@ heated_length = 1.0
     execute_on = "timestep_end"
   []
 
-  [total_pressure_drop_SC_limited]
-    type = ParsedPostprocessor
-    pp_names = 'total_pressure_drop_SC'
-    expression = 'min(total_pressure_drop_SC, 1e6)'
-    execute_on = "timestep_end"
-  []
+  # [total_pressure_drop_SC_limited]
+  #   type = ParsedPostprocessor
+  #   pp_names = 'total_pressure_drop_SC'
+  #   expression = 'min(total_pressure_drop_SC, 1e6)'
+  #   execute_on = "timestep_end"
+  # []
 
-  [Total_power]
+  [Total_power_qprime]
     type = ElementIntegralVariablePostprocessor
     variable = q_prime
     block = fuel_pins
   []
 
-  [report_mass_flux_inlet]
+  [Total_power_TH_balance]
+    type = SCMTHPowerPostprocessor
+    execute_on = 'timestep_end'
+  []
+
+  [report_mass_flux_inlet] # Used because i aim to couple with THM
     type = Receiver
     default = ${mass_flux_in}
   []
 
-  [report_temperature_inlet]
+  [report_temperature_inlet] # Used because i aim to couple with THM
     type = Receiver
     default = ${T_in}
     force_preaux = true
   []
 
-  [report_pressure_outlet]
+  [report_pressure_outlet] # Used because i aim to couple with THM
     type = Receiver
     default = ${P_out}
   []
 
-  [report_power]
+  [report_power] # Used because i aim to couple with THM
     type = Receiver
     default = 10000
   []
 []
 
-################################################################################
-# A multiapp that projects data to a detailed mesh
-################################################################################
+###############################################################################
 [MultiApps]
+  ################################################################################
+  # Couple to Thermo-Mechanical Pin model (uses kernels available in MOOSE)
+  ################################################################################
+  [sub]
+    type = FullSolveMultiApp
+    input_files = one_pin_problem_sub.i
+    execute_on = 'timestep_end'
+    positions = '0   0   0 '
+    output_in_position = true
+    bounding_box_padding = '0 0 0.01'
+  []
+
+  ################################################################################
+  # A multiapp that projects the solution to a detailed mesh for visualization purposes
+  ################################################################################
   [viz]
     type = FullSolveMultiApp
     input_files = '3D.i'
@@ -222,6 +276,35 @@ heated_length = 1.0
 []
 
 [Transfers]
+  [Tpin] # send pin surface temperature to pin model,
+    type = MultiAppGeneralFieldNearestLocationTransfer
+    to_multi_app = sub
+    variable = Pin_surface_temperature
+    source_variable = Tpin
+    execute_on = 'timestep_end'
+    greedy_search = true
+  []
+
+  # # [diameter] # send diameter information from pin model to subchannel
+  # #   type = MultiAppGeneralFieldNearestLocationTransfer
+  # #   from_multi_app = sub
+  # #   variable = Dpin
+  # #   source_variable = pin_diameter_deformed
+  # #   from_boundaries = right
+  # #   execute_on = 'timestep_end'
+  # #   greedy_search = true
+  # # []
+
+  [q_prime] # send heat flux from pin model to subchannel
+    type = MultiAppGeneralFieldNearestLocationTransfer
+    from_multi_app = sub
+    variable = q_prime
+    source_variable = q_prime
+    from_boundaries = right
+    execute_on = 'timestep_end'
+    greedy_search = true
+  []
+
   [subchannel_transfer]
     type = SCMSolutionTransfer
     transfer_type = subchannel

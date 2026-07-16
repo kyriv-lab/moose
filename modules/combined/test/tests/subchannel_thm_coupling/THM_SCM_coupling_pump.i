@@ -11,7 +11,7 @@ SC_core = 0.0004980799633447909 #m2
 # core parameters
 core_length = 1. # m
 core_n_elems = 1
-A_core = 0.005 #dummy
+A_core = ${SC_core} #dummy
 
 # pipe parameters
 pipe_dia = '${units 10. cm -> m}'
@@ -500,7 +500,7 @@ m_dot_sec_in = 1. # kg/s
   ##### Imposed core power in THM
   [core_power]
     type = ConstantPostprocessor
-    value = 10000
+    value = 100000
   []
 []
 
@@ -556,7 +556,7 @@ m_dot_sec_in = 1. # kg/s
 [MultiApps]
   # active = ''
   [subchannel]
-    type = FullSolveMultiApp
+    type = FullSolveMultiApp #TransientMultiApp
     input_files = 'subchannel.i'
     execute_on = 'timestep_end'
     positions = '0 0 0'
