@@ -557,7 +557,8 @@ TriSubChannel1PhaseProblem::computeh(int iblock)
         auto S_interp = computeInterpolatedValue(S_out, S_in, 0.5);
         auto volume = dz * S_interp;
 
-        PetscScalar Pe = 0.5;
+        // The sign of Pe carries the flow direction to the upwind and downwind schemes
+        PetscScalar Pe = (*_mdot_soln)(node_out) + (*_mdot_soln)(node_in) >= 0.0 ? 0.5 : -0.5;
         if (_interpolation_scheme == 3)
         {
           // Compute the cell Peclet number

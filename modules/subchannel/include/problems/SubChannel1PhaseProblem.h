@@ -154,6 +154,23 @@ protected:
 
   /// Computes implicit solve using PetSc
   PetscErrorCode implicitPetscSolve(int iblock);
+  /// Solves the coupled monolithic flow equations of one axial block with Newton's method
+  PetscErrorCode monolithicNewtonSolve(int iblock);
+  /// Residual A(x) x - b(x) of the coupled monolithic flow equations of one axial block at the
+  /// state x = [mass flow, pressure, crossflow], which is also set as the current solution
+  PetscErrorCode monolithicResidual(int iblock, Vec x, Vec f);
+  /// Sets the mass flow, pressure, and crossflow of one axial block from x
+  PetscErrorCode setMonolithicState(int iblock, Vec x);
+  /// Gathers the mass flow, pressure, and crossflow of one axial block into x
+  PetscErrorCode getMonolithicState(int iblock, Vec x);
+  /// Assembles the blocks and right-hand sides of the coupled monolithic flow equations at the
+  /// current state, without damping or relaxation
+  PetscErrorCode
+  assembleMonolithicSystem(int iblock, std::vector<Mat> & blocks, std::vector<Vec> & rhs);
+  /// Assembles the Picard linearization of the coupled monolithic flow equations at x into P
+  PetscErrorCode monolithicPreconditioner(int iblock, Vec x, Mat P);
+  friend PetscErrorCode formMonolithicFunction(SNES snes, Vec x, Vec f, void * ctx);
+  friend PetscErrorCode formMonolithicPreconditioner(SNES snes, Vec x, Mat J, Mat P, void * ctx);
 
   /// Function to initialize the solution & geometry fields
   virtual void initializeSolution() = 0;
@@ -162,7 +179,9 @@ protected:
   /// Computes the assembly bulk Reynolds number from inlet flow conditions
   void computeBulkReynoldsNumber();
 
-  /// Functions that computes the interpolation scheme given the Peclet number
+  /// Weight of the bottom value in the interpolation to the cell center. Its sign gives the flow
+  /// direction for the upwind and downwind schemes; the exponential scheme uses the cell Peclet
+  /// number itself
   PetscScalar computeInterpolationCoefficients(PetscScalar Peclet = 0.0);
   PetscScalar
   computeInterpolatedValue(PetscScalar topValue, PetscScalar botValue, PetscScalar Peclet = 0.0);
@@ -274,6 +293,8 @@ protected:
   const PetscReal & _dtol;
   /// The maximum number of iterations to use for the ksp linear solver
   const PetscInt & _maxit;
+  /// Whether the coupled monolithic flow equations are solved with Newton's method
+  const bool _monolithic_newton;
   /// The interpolation method used in constructing the systems
   const MooseEnum _interpolation_scheme;
   /// The direction of gravity

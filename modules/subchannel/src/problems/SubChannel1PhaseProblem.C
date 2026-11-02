@@ -29,6 +29,34 @@ struct Ctx
   SubChannel1PhaseProblem * schp;
 };
 
+/// Context of the Newton solve of the coupled monolithic flow equations of one axial block
+struct MonolithicCtx
+{
+  int iblock;
+  SubChannel1PhaseProblem * schp;
+};
+
+PetscErrorCode
+formMonolithicFunction(SNES, Vec x, Vec f, void * ctx)
+{
+  PetscFunctionBegin;
+  auto * cc = static_cast<MonolithicCtx *>(ctx);
+  LibmeshPetscCallQ(cc->schp->monolithicResidual(cc->iblock, x, f));
+  PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
+}
+
+PetscErrorCode
+formMonolithicPreconditioner(SNES, Vec x, Mat J, Mat P, void * ctx)
+{
+  PetscFunctionBegin;
+  auto * cc = static_cast<MonolithicCtx *>(ctx);
+  LibmeshPetscCallQ(cc->schp->monolithicPreconditioner(cc->iblock, x, P));
+  // Sets the base point of the matrix-free Jacobian at x
+  LibmeshPetscCallQ(MatAssemblyBegin(J, MAT_FINAL_ASSEMBLY));
+  LibmeshPetscCallQ(MatAssemblyEnd(J, MAT_FINAL_ASSEMBLY));
+  PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
+}
+
 PetscErrorCode
 formFunction(SNES, Vec x, Vec f, void * ctx)
 {
@@ -123,6 +151,10 @@ SubChannel1PhaseProblem::validParams()
   params.addParam<PetscReal>("atol", 1e-6, "Absolute tolerance for ksp solver");
   params.addParam<PetscReal>("dtol", 1e5, "Divergence tolerance or ksp solver");
   params.addParam<PetscInt>("maxit", 1e4, "Maximum number of iterations for ksp solver");
+  params.addParam<bool>("monolithic_newton",
+                        false,
+                        "Solve the coupled monolithic flow equations of each axial block with "
+                        "Newton's method instead of a single damped linearized solve");
   params.addParam<MooseEnum>(
       "interpolation_scheme",
       schemes,
@@ -174,7 +206,8 @@ SubChannel1PhaseProblem::validParams()
   params.addParamNamesToGroup(
       "P_tol P_maxit T_tol T_maxit T_relaxation enthalpy_subcycles "
       "mass_flow_equation_relaxation pressure_equation_relaxation crossflow_equation_relaxation "
-      "mass_flow_relaxation pressure_relaxation crossflow_relaxation rtol atol dtol maxit",
+      "mass_flow_relaxation pressure_relaxation crossflow_relaxation rtol atol dtol maxit "
+      "monolithic_newton",
       "Solver tolerances and iterations");
   params.addParamNamesToGroup("implicit segregated staggered_pressure interpolation_scheme",
                               "Solution method");
@@ -225,6 +258,7 @@ SubChannel1PhaseProblem::SubChannel1PhaseProblem(const InputParameters & params)
     _atol(getParam<PetscReal>("atol")),
     _dtol(getParam<PetscReal>("dtol")),
     _maxit(getParam<PetscInt>("maxit")),
+    _monolithic_newton(getParam<bool>("monolithic_newton")),
     _interpolation_scheme(getParam<MooseEnum>("interpolation_scheme")),
     _gravity_direction(getParam<MooseEnum>("gravity")),
     _dir_grav(computeGravityDir(_gravity_direction)),
@@ -565,10 +599,10 @@ SubChannel1PhaseProblem::computeInterpolationCoefficients(PetscScalar Peclet)
 {
   switch (_interpolation_scheme)
   {
-    case 0: // upwind interpolation
-      return 1.0;
-    case 1: // downwind interpolation
-      return 0.0;
+    case 0: // upwind interpolation: the weight is on the upstream node
+      return Peclet >= 0.0 ? 1.0 : 0.0;
+    case 1: // downwind interpolation: the weight is on the downstream node
+      return Peclet >= 0.0 ? 0.0 : 1.0;
     case 2: // central_difference interpolation
       return 0.5;
     case 3: // exponential interpolation (Peclet limited)
@@ -908,7 +942,8 @@ SubChannel1PhaseProblem::computeDP(int iblock)
           ki = k_grid[i_ch][iz];
         // Cell Peclet number of the exponential scheme, from the friction of the cell evaluated at
         // the arithmetic midpoint, as in the implicit branch
-        PetscScalar Pe = 0.5;
+        // The sign of Pe carries the flow direction to the upwind and downwind schemes
+        PetscScalar Pe = (*_mdot_soln)(node_out) + (*_mdot_soln)(node_in) >= 0.0 ? 0.5 : -0.5;
         if (_interpolation_scheme == 3)
         {
           const auto S_mid = computeInterpolatedValue((*_S_flow_soln)(node_out), S, 0.5);
@@ -971,8 +1006,9 @@ SubChannel1PhaseProblem::computeDP(int iblock)
         auto * node_in = _subchannel_mesh.getChannelNode(i_ch, iz - 1);
         auto * node_out = _subchannel_mesh.getChannelNode(i_ch, iz);
 
-        // interpolation weight coefficient
-        PetscScalar Pe = 0.5;
+        // interpolation weight coefficient; the sign of Pe carries the flow direction to the
+        // upwind and downwind schemes
+        PetscScalar Pe = (*_mdot_soln)(node_out) + (*_mdot_soln)(node_in) >= 0.0 ? 0.5 : -0.5;
         if (_interpolation_scheme == 3)
         {
           // Compute the Peclet number
@@ -1384,7 +1420,8 @@ SubChannel1PhaseProblem::computeP(int iblock)
           // Note: assuming uniform axial discretization in the curren code
           // We will need to update this later if we allow non-uniform refinements in the axial
           // direction
-          PetscScalar Pe = 0.5;
+          // The sign of Pe carries the flow direction to the upwind and downwind schemes
+          PetscScalar Pe = (*_mdot_soln)(node_out) + (*_mdot_soln)(node_in) >= 0.0 ? 0.5 : -0.5;
           auto alpha = computeInterpolationCoefficients(Pe);
           if (iz == last_node)
           {
@@ -1785,8 +1822,13 @@ SubChannel1PhaseProblem::computeWijResidual(int iblock)
         LibmeshPetscCall(
             VecSetValues(_cmc_time_derivative_rhs, 1, &row_td, &value_td_rhs, INSERT_VALUES));
 
-        // Assembling inertial term
-        PetscScalar Pe = 0.5;
+        // Assembling inertial term; the sign of Pe carries the direction of the axial flow through
+        // the gap to the upwind and downwind schemes
+        PetscScalar Pe = (*_mdot_soln)(node_in_i) + (*_mdot_soln)(node_out_i) +
+                                     (*_mdot_soln)(node_in_j) + (*_mdot_soln)(node_out_j) >=
+                                 0.0
+                             ? 0.5
+                             : -0.5;
         auto alpha = computeInterpolationCoefficients(Pe);
         auto mass_term_out = (*_mdot_soln)(node_out_i) / S_i_out / rho_i_out +
                              (*_mdot_soln)(node_out_j) / S_j_out / rho_j_out;
@@ -2329,6 +2371,283 @@ SubChannel1PhaseProblem::computeAddedHeatDuct(unsigned int i_ch, unsigned int iz
   {
     return 0.0;
   }
+}
+
+PetscErrorCode
+SubChannel1PhaseProblem::setMonolithicState(int iblock, Vec x)
+{
+  PetscFunctionBegin;
+  const unsigned int first_node = iblock * _block_size + 1;
+  const unsigned int last_node = (iblock + 1) * _block_size;
+  const PetscInt n_ch = _block_size * _n_channels;
+  const PetscScalar * xx;
+  LibmeshPetscCall(VecGetArrayRead(x, &xx));
+  for (unsigned int iz = first_node; iz <= last_node; ++iz)
+  {
+    const auto iz_ind = iz - first_node;
+    for (unsigned int i_ch = 0; i_ch < _n_channels; ++i_ch)
+    {
+      _mdot_soln->set(_subchannel_mesh.getChannelNode(i_ch, iz), xx[iz_ind * _n_channels + i_ch]);
+      _P_soln->set(_subchannel_mesh.getChannelNode(i_ch, iz - 1),
+                   xx[n_ch + iz_ind * _n_channels + i_ch]);
+    }
+    for (unsigned int i_gap = 0; i_gap < _n_gaps; ++i_gap)
+      _Wij(i_gap, iz) = xx[2 * n_ch + iz_ind * _n_gaps + i_gap];
+  }
+  LibmeshPetscCall(VecRestoreArrayRead(x, &xx));
+  PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
+}
+
+PetscErrorCode
+SubChannel1PhaseProblem::getMonolithicState(int iblock, Vec x)
+{
+  PetscFunctionBegin;
+  const unsigned int first_node = iblock * _block_size + 1;
+  const unsigned int last_node = (iblock + 1) * _block_size;
+  const PetscInt n_ch = _block_size * _n_channels;
+  PetscScalar * xx;
+  LibmeshPetscCall(VecGetArray(x, &xx));
+  for (unsigned int iz = first_node; iz <= last_node; ++iz)
+  {
+    const auto iz_ind = iz - first_node;
+    for (unsigned int i_ch = 0; i_ch < _n_channels; ++i_ch)
+    {
+      xx[iz_ind * _n_channels + i_ch] = (*_mdot_soln)(_subchannel_mesh.getChannelNode(i_ch, iz));
+      xx[n_ch + iz_ind * _n_channels + i_ch] =
+          (*_P_soln)(_subchannel_mesh.getChannelNode(i_ch, iz - 1));
+    }
+    for (unsigned int i_gap = 0; i_gap < _n_gaps; ++i_gap)
+      xx[2 * n_ch + iz_ind * _n_gaps + i_gap] = _Wij(i_gap, iz);
+  }
+  LibmeshPetscCall(VecRestoreArray(x, &xx));
+  PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
+}
+
+PetscErrorCode
+SubChannel1PhaseProblem::assembleMonolithicSystem(int iblock,
+                                                  std::vector<Mat> & blocks,
+                                                  std::vector<Vec> & rhs)
+{
+  PetscFunctionBegin;
+  const PetscInt Q = 3;
+  computeSumWij(iblock);
+  computeMdot(iblock);
+  computeWijPrime(iblock);
+  computeDP(iblock);
+  computeP(iblock);
+  computeWijResidual(iblock);
+  // Rows: mass, axial momentum, cross momentum; columns: mass flow, pressure, crossflow
+  const std::vector<Mat> sources = {_mc_axial_convection_mat,
+                                    _mc_density_pressure_mat,
+                                    _mc_sumWij_mat,
+                                    _amc_sys_mdot_mat,
+                                    _amc_pressure_force_mat,
+                                    nullptr,
+                                    nullptr,
+                                    _cmc_pressure_force_mat,
+                                    _cmc_sys_Wij_mat};
+  blocks.assign(Q * Q, nullptr);
+  for (const auto i : index_range(sources))
+    if (sources[i])
+      LibmeshPetscCall(MatDuplicate(sources[i], MAT_COPY_VALUES, &blocks[i]));
+  rhs.assign(Q, nullptr);
+  LibmeshPetscCall(VecDuplicate(_mc_axial_convection_rhs, &rhs[0]));
+  LibmeshPetscCall(VecCopy(_mc_axial_convection_rhs, rhs[0]));
+  LibmeshPetscCall(VecDuplicate(_amc_pressure_force_rhs, &rhs[1]));
+  LibmeshPetscCall(VecCopy(_amc_pressure_force_rhs, rhs[1]));
+  LibmeshPetscCall(VecAXPY(rhs[1], 1.0, _amc_sys_mdot_rhs));
+  LibmeshPetscCall(VecDuplicate(_cmc_sys_Wij_rhs, &rhs[2]));
+  LibmeshPetscCall(VecCopy(_cmc_sys_Wij_rhs, rhs[2]));
+  LibmeshPetscCall(VecAXPY(rhs[2], 1.0, _cmc_pressure_force_rhs));
+  PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
+}
+
+PetscErrorCode
+SubChannel1PhaseProblem::monolithicResidual(int iblock, Vec x, Vec f)
+{
+  PetscFunctionBegin;
+  const PetscInt Q = 3;
+  const PetscInt n_ch = _block_size * _n_channels;
+  const PetscInt sizes[Q] = {n_ch, n_ch, (PetscInt)(_block_size * _n_gaps)};
+  const PetscInt offsets[Q] = {0, n_ch, 2 * n_ch};
+  LibmeshPetscCall(setMonolithicState(iblock, x));
+  std::vector<Mat> blocks;
+  std::vector<Vec> rhs;
+  LibmeshPetscCall(assembleMonolithicSystem(iblock, blocks, rhs));
+  // F = A(x) x - b(x), assembled field by field
+  Vec x_sub[Q];
+  for (const auto c : make_range(Q))
+  {
+    IS is;
+    LibmeshPetscCall(ISCreateStride(PETSC_COMM_SELF, sizes[c], offsets[c], 1, &is));
+    LibmeshPetscCall(VecGetSubVector(x, is, &x_sub[c]));
+    LibmeshPetscCall(ISDestroy(&is));
+  }
+  PetscScalar * ff;
+  LibmeshPetscCall(VecGetArray(f, &ff));
+  for (const auto r : make_range(Q))
+  {
+    Vec Fr, Ax;
+    LibmeshPetscCall(VecDuplicate(rhs[r], &Fr));
+    LibmeshPetscCall(VecDuplicate(rhs[r], &Ax));
+    LibmeshPetscCall(VecCopy(rhs[r], Fr));
+    LibmeshPetscCall(VecScale(Fr, -1.0));
+    for (const auto c : make_range(Q))
+      if (blocks[Q * r + c])
+      {
+        LibmeshPetscCall(MatMult(blocks[Q * r + c], x_sub[c], Ax));
+        LibmeshPetscCall(VecAXPY(Fr, 1.0, Ax));
+      }
+    const PetscScalar * fr;
+    LibmeshPetscCall(VecGetArrayRead(Fr, &fr));
+    for (const auto i : make_range(sizes[r]))
+      ff[offsets[r] + i] = fr[i];
+    LibmeshPetscCall(VecRestoreArrayRead(Fr, &fr));
+    LibmeshPetscCall(VecDestroy(&Fr));
+    LibmeshPetscCall(VecDestroy(&Ax));
+  }
+  LibmeshPetscCall(VecRestoreArray(f, &ff));
+  for (const auto c : make_range(Q))
+  {
+    IS is;
+    LibmeshPetscCall(ISCreateStride(PETSC_COMM_SELF, sizes[c], offsets[c], 1, &is));
+    LibmeshPetscCall(VecRestoreSubVector(x, is, &x_sub[c]));
+    LibmeshPetscCall(ISDestroy(&is));
+  }
+  for (auto & m : blocks)
+    if (m)
+      LibmeshPetscCall(MatDestroy(&m));
+  for (auto & v : rhs)
+    LibmeshPetscCall(VecDestroy(&v));
+  PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
+}
+
+PetscErrorCode
+SubChannel1PhaseProblem::monolithicPreconditioner(int iblock, Vec x, Mat P)
+{
+  PetscFunctionBegin;
+  const PetscInt Q = 3;
+  LibmeshPetscCall(setMonolithicState(iblock, x));
+  std::vector<Mat> blocks;
+  std::vector<Vec> rhs;
+  LibmeshPetscCall(assembleMonolithicSystem(iblock, blocks, rhs));
+  // Copy the Picard blocks into the monolithic preconditioning matrix
+  const PetscInt n_ch = _block_size * _n_channels;
+  const PetscInt offsets[Q] = {0, n_ch, 2 * n_ch};
+  LibmeshPetscCall(MatZeroEntries(P));
+  for (const auto r : make_range(Q))
+    for (const auto c : make_range(Q))
+      if (Mat B = blocks[Q * r + c])
+      {
+        PetscInt m;
+        LibmeshPetscCall(MatGetSize(B, &m, nullptr));
+        for (PetscInt i = 0; i < m; ++i)
+        {
+          PetscInt ncols;
+          const PetscInt * cols;
+          const PetscScalar * vals;
+          LibmeshPetscCall(MatGetRow(B, i, &ncols, &cols, &vals));
+          const PetscInt row = offsets[r] + i;
+          for (PetscInt k = 0; k < ncols; ++k)
+          {
+            const PetscInt col = offsets[c] + cols[k];
+            LibmeshPetscCall(MatSetValues(P, 1, &row, 1, &col, &vals[k], ADD_VALUES));
+          }
+          LibmeshPetscCall(MatRestoreRow(B, i, &ncols, &cols, &vals));
+        }
+      }
+  // At the uniform-flow state with no crossflow, the advective inflow and outflow contributions to
+  // the crossflow diagonal cancel for central differencing and the gap friction vanishes, so the
+  // crossflow block of the linearization is singular. Shift the crossflow diagonal of the
+  // preconditioner only, by a fraction of the largest entry of each crossflow row; the residual is
+  // unchanged, so Newton still converges to the unshifted solution.
+  {
+    const PetscInt n_w = _block_size * _n_gaps;
+    Vec row_max;
+    LibmeshPetscCall(VecCreateSeq(PETSC_COMM_SELF, n_w, &row_max));
+    LibmeshPetscCall(MatGetRowMaxAbs(blocks[Q * 2 + 2], row_max, nullptr));
+    PetscScalar row_max_sum;
+    LibmeshPetscCall(VecSum(row_max, &row_max_sum));
+    // Large enough to remove the zero pivots, small enough that the shifted preconditioner stays
+    // close to the Jacobian; a tenth of the mean row scale was the fastest of 0.1, 1, and 10 on the
+    // EBR-II SHRT-17 steady state, and 10 lost convergence
+    const PetscScalar shift = n_w > 0 ? 0.1 * row_max_sum / n_w : 0.0;
+    for (const auto i : make_range(n_w))
+    {
+      const PetscInt row = offsets[2] + i;
+      LibmeshPetscCall(MatSetValues(P, 1, &row, 1, &row, &shift, ADD_VALUES));
+    }
+    LibmeshPetscCall(VecDestroy(&row_max));
+  }
+  LibmeshPetscCall(MatAssemblyBegin(P, MAT_FINAL_ASSEMBLY));
+  LibmeshPetscCall(MatAssemblyEnd(P, MAT_FINAL_ASSEMBLY));
+  for (auto & m : blocks)
+    if (m)
+      LibmeshPetscCall(MatDestroy(&m));
+  for (auto & v : rhs)
+    LibmeshPetscCall(VecDestroy(&v));
+  PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
+}
+
+PetscErrorCode
+SubChannel1PhaseProblem::monolithicNewtonSolve(int iblock)
+{
+  PetscFunctionBegin;
+  const PetscInt n = 2 * _block_size * _n_channels + _block_size * _n_gaps;
+  Vec x, r;
+  LibmeshPetscCall(VecCreateSeq(PETSC_COMM_SELF, n, &x));
+  LibmeshPetscCall(VecDuplicate(x, &r));
+  LibmeshPetscCall(getMonolithicState(iblock, x));
+  SNES snes;
+  LibmeshPetscCall(SNESCreate(PETSC_COMM_SELF, &snes));
+  LibmeshPetscCall(SNESSetOptionsPrefix(snes, "scm_newton_"));
+  MonolithicCtx ctx{iblock, this};
+  LibmeshPetscCall(SNESSetFunction(snes, r, formMonolithicFunction, &ctx));
+  // Precondition with the Picard linearization, factored exactly
+  Mat P;
+  LibmeshPetscCall(MatCreateSeqAIJ(PETSC_COMM_SELF, n, n, 60, nullptr, &P));
+  LibmeshPetscCall(MatSetOption(P, MAT_NEW_NONZERO_ALLOCATION_ERR, PETSC_FALSE));
+  // Jacobian-free Newton-Krylov: the Jacobian is applied by finite differences of the residual,
+  // while P is assembled
+  Mat J;
+  LibmeshPetscCall(MatCreateSNESMF(snes, &J));
+  LibmeshPetscCall(SNESSetJacobian(snes, J, P, formMonolithicPreconditioner, &ctx));
+  KSP ksp;
+  PC pc;
+  LibmeshPetscCall(SNESGetKSP(snes, &ksp));
+  LibmeshPetscCall(KSPSetType(ksp, KSPFGMRES));
+  LibmeshPetscCall(KSPGetPC(ksp, &pc));
+  LibmeshPetscCall(PCSetType(pc, PCLU));
+  // The factorization of the preconditioner dominates the cost of the Newton solve. The reverse
+  // Cuthill-McKee ordering keeps its fill small for the banded axial coupling of the block, and the
+  // factorization is reused for all Newton iterations of a solve; options can override both.
+  LibmeshPetscCall(PCFactorSetMatOrderingType(pc, MATORDERINGRCM));
+  LibmeshPetscCall(SNESSetLagPreconditioner(snes, -2));
+  // With the factored linearization as preconditioner the Newton linear solves take about ten
+  // iterations; a solve that needs far more has stalled, and continuing it only delays the failure
+  LibmeshPetscCall(KSPSetTolerances(ksp, PETSC_DEFAULT, PETSC_DEFAULT, PETSC_DEFAULT, 200));
+  LibmeshPetscCall(SNESSetFromOptions(snes));
+  LibmeshPetscCall(SNESSolve(snes, nullptr, x));
+  SNESConvergedReason reason;
+  PetscInt its;
+  PetscReal fnorm;
+  LibmeshPetscCall(SNESGetConvergedReason(snes, &reason));
+  LibmeshPetscCall(SNESGetIterationNumber(snes, &its));
+  LibmeshPetscCall(SNESGetFunctionNorm(snes, &fnorm));
+  _console << "Monolithic Newton solve of block " << iblock << ": " << SNESConvergedReasons[reason]
+           << " after " << its << " iterations, residual norm " << fnorm << std::endl;
+  // Leave the state, and the assembled operators, at the final iterate
+  LibmeshPetscCall(monolithicResidual(iblock, x, r));
+  // The pressure fixed-point error of the outer iteration is the change over this Newton solve
+  _pressure_fixed_point_error = std::max(_pressure_fixed_point_error, fnorm);
+  LibmeshPetscCall(SNESDestroy(&snes));
+  LibmeshPetscCall(MatDestroy(&P));
+  LibmeshPetscCall(MatDestroy(&J));
+  LibmeshPetscCall(VecDestroy(&x));
+  LibmeshPetscCall(VecDestroy(&r));
+  if (reason < 0)
+    mooseError(name(), ": monolithic Newton solve failed: ", SNESConvergedReasons[reason], ".");
+  PetscFunctionReturn(LIBMESH_PETSC_SUCCESS);
 }
 
 PetscErrorCode
@@ -2915,7 +3234,10 @@ SubChannel1PhaseProblem::externalSolve()
             computeWijFromSolve(iblock);
           else
           {
-            LibmeshPetscCall(implicitPetscSolve(iblock));
+            if (_monolithic_newton)
+              LibmeshPetscCall(monolithicNewtonSolve(iblock));
+            else
+              LibmeshPetscCall(implicitPetscSolve(iblock));
             computeWijPrime(iblock);
             V("Done with main solve.");
           }
