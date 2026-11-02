@@ -442,6 +442,9 @@ protected:
   PetscScalar _max_sumWij;
   PetscScalar _max_sumWij_new;
   PetscScalar _correction_factor = 1.0;
+  /// Crossflow at the start of the current outer iteration, which anchors the added resistance
+  /// so that it vanishes once the outer iteration converges
+  libMesh::DenseMatrix<Real> _Wij_anchor;
   /// Maximum pressure fixed-point update before solution relaxation over the blocks
   Real _pressure_fixed_point_error = 1.0;
 

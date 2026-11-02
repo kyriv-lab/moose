@@ -2591,6 +2591,11 @@ SubChannel1PhaseProblem::implicitPetscSolve(int iblock)
     _added_K_old = _added_K;
 
     LibmeshPetscCall(MatDiagonalSet(mat_array[2 * Q + 2], unity_vec_Wij, ADD_VALUES));
+    // Anchor the resistance at the crossflow of the start of the outer iteration rather than at
+    // zero, so it does not bias the converged solution
+    LibmeshPetscCall(populateVectorFromDense<libMesh::DenseMatrix<Real>>(
+        _Wij_loc_vec, _Wij_anchor, first_node, last_node, _n_gaps));
+    LibmeshPetscCall(VecAXPY(vec_array[2], _added_K, _Wij_loc_vec));
 
     // ---- cleanup temp vectors used above ----
     LibmeshPetscCall(VecDestroy(&mdot_estimate));
@@ -2898,6 +2903,7 @@ SubChannel1PhaseProblem::externalSolve()
     _pressure_fixed_point_error = 0.0;
     _console << "Solving Outer Iteration : " << P_it << std::endl;
     const auto P_old = saveValues(*_P_soln, 0, _n_cells);
+    _Wij_anchor = _Wij;
     for (unsigned int iblock = 0; iblock < _n_blocks; iblock++)
     {
       int last_level = (iblock + 1) * _block_size;
